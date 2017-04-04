@@ -148,6 +148,16 @@ public class Main {
         m('x', KeyEvent.VK_X);
         m('y', KeyEvent.VK_Y);
         m('z', KeyEvent.VK_Z);
+        m('1', KeyEvent.VK_1);
+        m('2', KeyEvent.VK_2);
+        m('3', KeyEvent.VK_3);
+        m('4', KeyEvent.VK_4);
+        m('5', KeyEvent.VK_5);
+        m('6', KeyEvent.VK_6);
+        m('7', KeyEvent.VK_7);
+        m('8', KeyEvent.VK_8);
+        m('9', KeyEvent.VK_9);
+        m('0', KeyEvent.VK_0);
         m(' ', KeyEvent.VK_SPACE);
         m('!', KeyEvent.VK_EXCLAMATION_MARK);
         m(',', KeyEvent.VK_COMMA);

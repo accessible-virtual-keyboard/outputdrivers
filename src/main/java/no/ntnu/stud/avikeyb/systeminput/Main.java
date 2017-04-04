@@ -1,5 +1,6 @@
 package no.ntnu.stud.avikeyb.systeminput;
 
+import org.java_websocket.WebSocket;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.drafts.Draft_17;
 import org.java_websocket.handshake.ServerHandshake;
@@ -9,6 +10,9 @@ import java.awt.event.KeyEvent;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.HashMap;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by pitmairen on 28/03/2017.
@@ -18,7 +22,7 @@ public class Main {
 
     public static void main(String[] args) throws URISyntaxException, InterruptedException, AWTException {
         //WebSocketImpl.DEBUG = true;
-        if(args.length == 0){
+        if (args.length == 0) {
             System.out.println("Usage java -jar systeminput.jar ws://example.com/output");
             System.exit(1);
         }
@@ -29,88 +33,141 @@ public class Main {
 
 
     private final URI keyboardOutputSocketURI;
-    private final Robot robot;
-
-    private static HashMap<Character, Integer> characterToKeyEventMap = new HashMap<>();
-    private static StringBuilder outputBuffer = new StringBuilder();
-    private WebSocketClient ws;
+    private final static HashMap<Character, Integer> characterToKeyEventMap = new HashMap<>();
+    private final BlockingQueue<String> outputBuffer;
 
 
-    public Main(URI keyboardOutputSocket) throws AWTException {
-        this.robot = new Robot();
-        this.keyboardOutputSocketURI = keyboardOutputSocket;
+    public Main(URI keyboardOutputSocketURI) throws AWTException {
+        this.keyboardOutputSocketURI = keyboardOutputSocketURI;
+        outputBuffer = new LinkedBlockingQueue<>();
     }
 
 
-    private void run() {
+    private void run() throws InterruptedException {
 
-        connectToServer();
+        Thread socketThread = new Thread(new SocketConnection());
+        Thread writerThread = new Thread(new RobotWriter());
 
-        while (true) {
-            // Continuously check and send the buffer if there is anything to send
-            robot.delay(10);
-            sendBuffer();
+        socketThread.start();
+        writerThread.start();
+
+        socketThread.join();
+        writerThread.join();
+
+    }
+
+
+    private class RobotWriter implements Runnable {
+
+        private Robot robot;
+
+        @Override
+        public void run() {
+
+            try {
+                robot = new Robot();
+            } catch (AWTException e) {
+                e.printStackTrace();
+                return;
+            }
+
+            while (true) {
+                try {
+                    consumeNext();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    break;
+                }
+            }
+
+
         }
 
-    }
+        private void consumeNext() throws InterruptedException {
 
+            String next = outputBuffer.take();
 
-    // Adds the output received from the socket to the output buffer.
-    // Because it is unclear if the robot is thread safe, the robot is not called directly from the web socket thread.
-    // Instead the buffer is used so that the robot is only called from the main thread.
-    private synchronized void addToOutputBuffer(String output) {
-        outputBuffer.append(output);
-    }
-
-
-    // Translate the current output buffer into key events and send it to the robot
-    private synchronized void sendBuffer() {
-
-        if (outputBuffer.length() == 0) {
-            return;
-        }
-
-        String output = outputBuffer.toString();
-        outputBuffer.setLength(0); // Reset the output buffer
-
-        for (int i = 0; i < output.length(); i++) {
-            Character c = output.charAt(i);
-            if (characterToKeyEventMap.containsKey(c)) {
-                robot.keyPress(characterToKeyEventMap.get(c));
-                robot.keyRelease(characterToKeyEventMap.get(c));
+            for (int i = 0; i < next.length(); i++) {
+                Character c = next.charAt(i);
+                if (characterToKeyEventMap.containsKey(c)) {
+                    robot.keyPress(characterToKeyEventMap.get(c));
+                    robot.keyRelease(characterToKeyEventMap.get(c));
+                }
             }
         }
 
     }
 
-    private synchronized void connectToServer() {
 
-        System.out.println("Trying to connect to server " + keyboardOutputSocketURI);
+    private class SocketConnection implements Runnable {
 
-        ws = new WebSocketClient(keyboardOutputSocketURI, new Draft_17()) {
-            @Override
-            public void onMessage(String message) {
-                System.out.println("received " + message);
-                addToOutputBuffer(message);
-            }
+        private WebSocketClient ws;
+        private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
 
-            @Override
-            public void onOpen(ServerHandshake handshake) {
-                System.out.println("Connected to server");
-            }
 
-            @Override
-            public void onClose(int code, String reason, boolean remote) {
-                System.out.println("Connection to server closed. Reconnecting...");
+        @Override
+        public void run() {
+
+            try {
                 connectToServer();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return;
             }
 
-            @Override
-            public void onError(Exception ex) {
-                ex.printStackTrace();
+            while (true) {
+                try {
+                    String next = messages.poll(2, TimeUnit.SECONDS);
+                    if (next != null) {
+                        outputBuffer.put(next);
+                    }
+
+                    if (ws.getReadyState() == WebSocket.READYSTATE.CLOSED) {
+                        System.out.println("Reconnecting...");
+                        connectToServer();
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    break;
+                }
             }
-        };
-        ws.connect();
+        }
+
+
+        private void connectToServer() throws InterruptedException {
+
+            System.out.println("Trying to connect to server " + keyboardOutputSocketURI);
+
+            ws = new WebSocketClient(keyboardOutputSocketURI, new Draft_17()) {
+                @Override
+                public void onMessage(String message) {
+                    System.out.println("received " + message);
+                    try {
+                        messages.put(message);
+                    } catch (InterruptedException e) {
+                        Thread.interrupted();
+                    }
+                }
+
+                @Override
+                public void onOpen(ServerHandshake handshake) {
+                    System.out.println("Connected to server");
+                }
+
+                @Override
+                public void onClose(int code, String reason, boolean remote) {
+                    System.out.println("Connection to server closed.");
+                }
+
+                @Override
+                public void onError(Exception ex) {
+                    ex.printStackTrace();
+                }
+            };
+
+            ws.connect();
+
+        }
 
     }
 
